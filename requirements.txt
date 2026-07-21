@@ -1,6 +1,6 @@
 streamlit
-rapidocr_onnxruntime
+rapidocr-onnxruntime
 pymupdf
 opencv-python-headless
-Pillow
-numpy
+pillow
+numpy<2.0.0
