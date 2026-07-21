@@ -1,96 +1,103 @@
-import streamlit as st
-from PIL import Image
 import fitz  # PyMuPDF
-import cv2
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
-import io
+import streamlit as st
 
-# পেজ কনফিগারেশন
-st.set_page_config(page_title="BILLAH TRAVELS - Smart OCR System", layout="wide")
+# RapidOCR ইনিশিয়ালাইজেশন
+engine = RapidOCR()
 
-# OCR ইঞ্জিন লোড
-@st.cache_resource
-def load_ocr_engine():
-    return RapidOCR()
 
-st.title("✈️ BILLAH TRAVELS - Smart Document OCR System")
-st.caption("স্ক্যান করা ছবি বা পিডিএফ থেকে অটোমেটিক টেক্সট ও ফেস এক্সট্রাক্ট করুন")
+def extract_and_merge_form_lines(img_np):
+    """OCR থেকে পাওয়া টেক্সটগুলোকে সঠিক ধারাবাহিকতায় সাজিয়ে
 
-st.write("---")
+    এবং একই লাইনের শব্দগুলোকে একসাথে যুক্ত করে স্ট্রিম তৈরি করার ফাংশন।
+    """
+    results, _ = engine(img_np)
+    if not results:
+        return ""
 
-# সাইডবার
-st.sidebar.header("📁 ফাইল আপলোড করুন")
-uploaded_file = st.sidebar.file_uploader(
-    "পিডিএফ (PDF) বা ইমেজ (JPG, PNG) নির্বাচন করুন", 
-    type=["pdf", "png", "jpg", "jpeg"]
-)
+    items = []
+    for box, text, conf in results:
+        text_str = text.strip()
+        if not text_str:
+            continue
 
-# ট্যাবসমূহ
-tab1, tab2, tab3 = st.tabs(["📄 ফাইল প্রিভিউ", "🔍 OCR টেক্সট এক্সট্রাকশন", "📸 ফেস ও সিগনেচার"])
+        ys = [pt[1] for pt in box]
+        xs = [pt[0] for pt in box]
 
-if uploaded_file is not None:
-    file_type = uploaded_file.name.split('.')[-1].lower()
-    image_np = None
+        y_min, y_max = min(ys), max(ys)
+        x_min = min(xs)
+        height = y_max - y_min
+        y_center = (y_min + y_max) / 2.0
 
-    if file_type in ["jpg", "jpeg", "png"]:
-        pil_img = Image.open(uploaded_file).convert("RGB")
-        image_np = np.array(pil_img)
-    elif file_type == "pdf":
-        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-        page = doc.load_page(0)
-        pix = page.get_pixmap()
-        img_bytes = pix.tobytes("png")
-        pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        image_np = np.array(pil_img)
+        items.append(
+            {
+                "text": text_str,
+                "x_min": x_min,
+                "y_center": y_center,
+                "height": height,
+            }
+        )
 
-    # ট্যাব ১: ফাইল প্রিভিউ
-    with tab1:
-        st.subheader("আপলোড করা ফাইলের প্রিভিউ")
-        st.image(image_np, caption="আপলোড করা নথি", use_container_width=True)
+    # ১. Y-center অনুযায়ী প্রাথমিকভাবে সর্ট
+    items.sort(key=lambda item: item["y_center"])
 
-    # ট্যাব ২: OCR টেক্সট এক্সট্রাকশন
-    with tab2:
-        st.subheader("নিখুঁত টেক্সট এক্সট্রাকশন")
-        with st.spinner("লেখা পড়ার কাজ চলছে..."):
-            engine = load_ocr_engine()
-            result, _ = engine(image_np)
-            
-            extracted_texts = []
-            if result:
-                extracted_texts = [line[1] for line in result]
-            
-            if extracted_texts:
-                st.success("✅ টেক্সট এক্সট্রাকশন সম্পন্ন হয়েছে!")
-                
-                full_text = "\n".join(extracted_texts)
-                st.write("### 📝 সম্পূর্ণ টেক্সট একসাথে (Copy Text):")
-                st.text_area("এখান থেকে কপি করুন:", value=full_text, height=150)
-                
-                st.write("---")
-                st.write("### 🔍 লাইন বাই লাইন টেক্সট এডিটর:")
-                for idx, text in enumerate(extracted_texts, 1):
-                    st.text_input(f"লাইন {idx}", value=text, key=f"line_{idx}")
-            else:
-                st.warning("⚠️ কোনো টেক্সট খুঁজে পাওয়া যায়নি। পরিষ্কার ডকুমেন্ট ব্যবহার করুন।")
+    # ২. পাশাপাশি থাকা টেক্সটকে একই লাইনে গ্রুপ করা
+    rows = []
+    for item in items:
+        placed = False
+        for row in rows:
+            avg_height = sum(i["height"] for i in row) / len(row)
+            avg_y_center = sum(i["y_center"] for i in row) / len(row)
 
-    # ট্যাব ৩: ফেস ডিটেকশন
-    with tab3:
-        st.subheader("ছবি ও সিগনেচার এক্সট্রাক্ট")
-        st.write("ডকুমেন্ট থেকে মুখমণ্ডল (Face) ডিটেক্ট করা হচ্ছে...")
-        
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-        
-        if len(faces) > 0:
-            st.success(f"✅ {len(faces)} টি মুখমণ্ডল চিহ্নিত করা হয়েছে!")
-            for i, (x, y, w, h) in enumerate(faces):
-                face_img = image_np[y:y+h, x:x+w]
-                st.image(face_img, caption=f"এক্সট্রাক্ট করা ছবি {i+1}", width=180)
-        else:
-            st.info("💡 অটো-ডিটেকশনে ছবি পাওয়া যায়নি।")
+            # কাছাকাছি Y-পজিশনে থাকলে একই লাইনে রাখা হবে
+            if abs(item["y_center"] - avg_y_center) <= (avg_height * 0.6):
+                row.append(item)
+                placed = True
+                break
 
-else:
-    with tab1:
-        st.info("👈 কাজ শুরু করতে বামদিকের সাইডবার থেকে যেকোনো একটি ফাইল আপলোড করুন।")
+        if not placed:
+            rows.append([item])
+
+    # ৩. উপর থেকে নিচে লাইনগুলো সাজানো
+    rows.sort(key=lambda r: sum(i["y_center"] for i in r) / len(r))
+
+    # ৪. বাম থেকে ডানে টেক্সট জোড়া দিয়ে পূর্ণাঙ্গ প্যারাগ্রাফ তৈরি
+    final_lines = []
+    for row in rows:
+        row.sort(key=lambda i: i["x_min"])
+        line_str = "  ".join([i["text"] for i in row])
+        final_lines.append(line_str)
+
+    return "\n".join(final_lines)
+
+
+# --- Streamlit UI ---
+st.set_page_config(page_title="Document Text Extractor", layout="wide")
+st.title("📄 ডকুমেন্ট টেক্সট এক্সট্রাক্টর")
+
+uploaded_file = st.file_uploader("আপনার PDF ফাইলটি আপলোড করুন", type=["pdf"])
+
+if uploaded_file:
+    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        st.subheader(f"📖 পৃষ্ঠা {page_num + 1}")
+
+        # PDF থেকে ইমেজ কনভার্সন
+        pix = page.get_pixmap(dpi=200)
+        img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+            pix.h, pix.w, pix.n
+        )
+
+        # সঠিক সিকোয়েন্স অনুযায়ী টেক্সট এক্সট্রাক্ট করা
+        full_extracted_text = extract_and_merge_form_lines(img_np)
+
+        # একটি সিঙ্গেল টেক্সট বক্সে সম্পূর্ণ আউটপুট প্রদর্শন
+        st.text_area(
+            label="এক্সট্রাক্ট করা টেক্সট (অরিজিনাল বিন্যাস অনুযায়ী):",
+            value=full_extracted_text,
+            height=450,
+            key=f"page_text_{page_num}",
+        )
