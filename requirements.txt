@@ -3,4 +3,3 @@ rapidocr-onnxruntime
 pymupdf
 opencv-python-headless
 pillow
-numpy<2.0.0
