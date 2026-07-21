@@ -4,4 +4,4 @@ rapidocr-onnxruntime
 opencv-python-headless
 numpy
 Pillow
-streamlit-cropper
+streamlit-drawable-canvas
