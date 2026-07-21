@@ -1,0 +1,6 @@
+streamlit
+rapidocr_onnxruntime
+pymupdf
+opencv-python-headless
+Pillow
+numpy
