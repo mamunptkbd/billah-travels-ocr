@@ -1,5 +1,7 @@
 streamlit
+PyMuPDF
 rapidocr-onnxruntime
-pymupdf
 opencv-python-headless
-pillow
+numpy
+Pillow
+streamlit-cropper
