@@ -3,7 +3,7 @@ import numpy as np
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 import streamlit as st
-from streamlit_cropper import st_cropper
+from streamlit_drawable_canvas import st_canvas
 
 # RapidOCR ইনিশিয়ালাইজেশন
 engine = RapidOCR()
@@ -73,11 +73,78 @@ def extract_and_merge_form_lines(img_np):
     return "\n".join(final_lines)
 
 
+def process_interactive_canvas(pil_img, key_suffix):
+    """ক্যানভাসে মাউস ড্র্যাগ সিলেকশন ও এক্সট্রাকশন প্রসেসিং ফাংশন"""
+    col1, col2 = st.columns(2)
+
+    w, h = pil_img.size
+    # পেজটিকে ডিসপ্লেতে মানানসই সাইজে নিয়ে আসা
+    max_width = 600
+    scale = min(1.0, max_width / w)
+    canvas_w = int(w * scale)
+    canvas_h = int(h * scale)
+
+    with col1:
+        st.write(
+            "👉 **ছবি বা পেজের উপর মাউস চেপে টেনে (Drag) অংশ সিলেক্ট করুন:**"
+        )
+
+        # ইন্টারেক্টিভ ক্যানভাস (শুরুতে সম্পূর্ণ খালি থাকবে)
+        canvas_result = st_canvas(
+            fill_color="rgba(0, 255, 0, 0.2)",  # ড্র্যাগ করলে হাল্কা সবুজ ব্যাকগ্রাউন্ড
+            stroke_color="#00FF00",  # সবুজ বর্ডার
+            stroke_width=2,
+            background_image=pil_img,
+            update_streamlit=True,
+            width=canvas_w,
+            height=canvas_h,
+            drawing_mode="rect",  # চতুর্ভুজ ড্র্যাগ মোড
+            key=f"canvas_{key_suffix}",
+        )
+
+    with col2:
+        st.write("📝 **সিলেক্ট করা অংশের টেক্সট:**")
+        extracted_text = ""
+
+        # যদি ইউজার মাউস দিয়ে কোনো বক্স ড্র্যাগ করে থাকে
+        if (
+            canvas_result.json_data is not None
+            and len(canvas_result.json_data["objects"]) > 0
+        ):
+            # সর্বশেষে ড্র্যাগ করা বক্সটির কোঅর্ডিনেট নেওয়া
+            obj = canvas_result.json_data["objects"][-1]
+
+            left = int(obj["left"] / scale)
+            top = int(obj["top"] / scale)
+            width = int(obj["width"] * obj["scaleX"] / scale)
+            height = int(obj["height"] * obj["scaleY"] / scale)
+
+            if width > 5 and height > 5:
+                right = min(w, left + width)
+                bottom = min(h, top + height)
+                left = max(0, left)
+                top = max(0, top)
+
+                # শুধু সিলেক্ট করা অংশ ক্রপ করা
+                cropped_pil = pil_img.crop((left, top, right, bottom))
+                cropped_np = np.array(cropped_pil.convert("RGB"))
+
+                # টেক্সট এক্সট্রাক্ট করা
+                extracted_text = extract_and_merge_form_lines(cropped_np)
+        else:
+            extracted_text = "👈 বাম পাশের ছবিতে মাউস দিয়ে ড্র্যাগ করে কোনো অংশ সিলেক্ট করলে এখানে টেক্সট ভেসে উঠবে।"
+
+        st.text_area(
+            label="Extracted Text Area",
+            value=extracted_text,
+            height=450,
+            key=f"text_{key_suffix}",
+        )
+
+
 # --- Streamlit UI Config ---
-st.set_page_config(
-    page_title="Crop & Extract Document Text", layout="wide"
-)
-st.title("✂️ সিলেক্টিভ টেক্সট এক্সট্রাক্টর")
+st.set_page_config(page_title="Drag & Extract OCR", layout="wide")
+st.title("🖱️ মাউস ড্র্যাগ টেক্সট এক্সট্রাক্টর")
 
 uploaded_file = st.file_uploader(
     "আপনার PDF বা Image ফাইল আপলোড করুন",
@@ -87,10 +154,8 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
     file_type = uploaded_file.name.split(".")[-1].lower()
 
-    # ক. যদি PDF ফাইল হয়
     if file_type == "pdf":
         doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-
         for page_num in range(len(doc)):
             page = doc[page_num]
             st.subheader(f"📖 পৃষ্ঠা {page_num + 1}")
@@ -100,61 +165,7 @@ if uploaded_file:
                 "RGB", [pix.width, pix.height], pix.samples
             )
 
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.write(
-                    "✂️ **বাম পাশের বর্ডার টেনে যতটুকু অংশ প্রয়োজন সিলেক্ট করুন:**"
-                )
-                # ইমেজের ওপর ক্রপ বক্স দেখাবে
-                cropped_img = st_cropper(
-                    pil_img,
-                    realtime_update=True,
-                    box_color="#00FF00",  # সবুজ রঙের সিলেকশন বক্স
-                    aspect_ratio=None,
-                    key=f"crop_pdf_{page_num}",
-                )
-
-            with col2:
-                st.write("📝 **সিলেক্ট করা অংশের টেক্সট:**")
-                if cropped_img:
-                    cropped_np = np.array(cropped_img.convert("RGB"))
-                    extracted_text = extract_and_merge_form_lines(cropped_np)
-
-                    st.text_area(
-                        label="Selected Region Text",
-                        value=extracted_text,
-                        height=400,
-                        key=f"text_pdf_{page_num}",
-                    )
-
-    # খ. যদি সাধারণ ইমেজ ফাইল হয় (JPG / PNG)
+            process_interactive_canvas(pil_img, f"pdf_{page_num}")
     else:
         pil_img = Image.open(uploaded_file).convert("RGB")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.write(
-                "✂️ **বাম পাশের বর্ডার টেনে যতটুকু অংশ প্রয়োজন সিলেক্ট করুন:**"
-            )
-            cropped_img = st_cropper(
-                pil_img,
-                realtime_update=True,
-                box_color="#00FF00",
-                aspect_ratio=None,
-                key="crop_img",
-            )
-
-        with col2:
-            st.write("📝 **সিলেক্ট করা অংশের টেক্সট:**")
-            if cropped_img:
-                cropped_np = np.array(cropped_img)
-                extracted_text = extract_and_merge_form_lines(cropped_np)
-
-                st.text_area(
-                    label="Selected Region Text",
-                    value=extracted_text,
-                    height=400,
-                    key="text_img",
-                )
+        process_interactive_canvas(pil_img, "img")
