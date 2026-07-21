@@ -1,16 +1,18 @@
 import fitz  # PyMuPDF
 import numpy as np
+from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 import streamlit as st
+from streamlit_cropper import st_cropper
 
 # RapidOCR ইনিশিয়ালাইজেশন
 engine = RapidOCR()
 
 
 def extract_and_merge_form_lines(img_np):
-    """OCR থেকে পাওয়া টেক্সটগুলোকে সঠিক ধারাবাহিকতায় সাজিয়ে
+    """OCR থেকে পাওয়া টেক্সটগুলোকে অরিজিনাল লেআউট অনুযায়ী
 
-    এবং একই লাইনের শব্দগুলোকে একসাথে যুক্ত করে স্ট্রিম তৈরি করার ফাংশন।
+    সাজিয়ে একই লাইনে যুক্ত করার ফাংশন।
     """
     results, _ = engine(img_np)
     if not results:
@@ -39,10 +41,10 @@ def extract_and_merge_form_lines(img_np):
             }
         )
 
-    # ১. Y-center অনুযায়ী প্রাথমিকভাবে সর্ট
+    # ১. Y-center অনুযায়ী প্রাথমিক সর্টিং
     items.sort(key=lambda item: item["y_center"])
 
-    # ২. পাশাপাশি থাকা টেক্সটকে একই লাইনে গ্রুপ করা
+    # ২. একই লাইনের টেক্সটগুলোকে গ্রুপ করা
     rows = []
     for item in items:
         placed = False
@@ -50,7 +52,6 @@ def extract_and_merge_form_lines(img_np):
             avg_height = sum(i["height"] for i in row) / len(row)
             avg_y_center = sum(i["y_center"] for i in row) / len(row)
 
-            # কাছাকাছি Y-পজিশনে থাকলে একই লাইনে রাখা হবে
             if abs(item["y_center"] - avg_y_center) <= (avg_height * 0.6):
                 row.append(item)
                 placed = True
@@ -59,10 +60,10 @@ def extract_and_merge_form_lines(img_np):
         if not placed:
             rows.append([item])
 
-    # ৩. উপর থেকে নিচে লাইনগুলো সাজানো
+    # ৩. উপর থেকে নিচে লাইন সাজানো
     rows.sort(key=lambda r: sum(i["y_center"] for i in r) / len(r))
 
-    # ৪. বাম থেকে ডানে টেক্সট জোড়া দিয়ে পূর্ণাঙ্গ প্যারাগ্রাফ তৈরি
+    # ৪. বাম থেকে ডানে জোড়া লাগানো
     final_lines = []
     for row in rows:
         row.sort(key=lambda i: i["x_min"])
@@ -72,32 +73,88 @@ def extract_and_merge_form_lines(img_np):
     return "\n".join(final_lines)
 
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="Document Text Extractor", layout="wide")
-st.title("📄 ডকুমেন্ট টেক্সট এক্সট্রাক্টর")
+# --- Streamlit UI Config ---
+st.set_page_config(
+    page_title="Crop & Extract Document Text", layout="wide"
+)
+st.title("✂️ সিলেক্টিভ টেক্সট এক্সট্রাক্টর")
 
-uploaded_file = st.file_uploader("আপনার PDF ফাইলটি আপলোড করুন", type=["pdf"])
+uploaded_file = st.file_uploader(
+    "আপনার PDF বা Image ফাইল আপলোড করুন",
+    type=["pdf", "png", "jpg", "jpeg"],
+)
 
 if uploaded_file:
-    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+    file_type = uploaded_file.name.split(".")[-1].lower()
 
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        st.subheader(f"📖 পৃষ্ঠা {page_num + 1}")
+    # ক. যদি PDF ফাইল হয়
+    if file_type == "pdf":
+        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
 
-        # PDF থেকে ইমেজ কনভার্সন
-        pix = page.get_pixmap(dpi=200)
-        img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-            pix.h, pix.w, pix.n
-        )
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            st.subheader(f"📖 পৃষ্ঠা {page_num + 1}")
 
-        # সঠিক সিকোয়েন্স অনুযায়ী টেক্সট এক্সট্রাক্ট করা
-        full_extracted_text = extract_and_merge_form_lines(img_np)
+            pix = page.get_pixmap(dpi=200)
+            pil_img = Image.frombytes(
+                "RGB", [pix.width, pix.height], pix.samples
+            )
 
-        # একটি সিঙ্গেল টেক্সট বক্সে সম্পূর্ণ আউটপুট প্রদর্শন
-        st.text_area(
-            label="এক্সট্রাক্ট করা টেক্সট (অরিজিনাল বিন্যাস অনুযায়ী):",
-            value=full_extracted_text,
-            height=450,
-            key=f"page_text_{page_num}",
-        )
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.write(
+                    "✂️ **বাম পাশের বর্ডার টেনে যতটুকু অংশ প্রয়োজন সিলেক্ট করুন:**"
+                )
+                # ইমেজের ওপর ক্রপ বক্স দেখাবে
+                cropped_img = st_cropper(
+                    pil_img,
+                    realtime_update=True,
+                    box_color="#00FF00",  # সবুজ রঙের সিলেকশন বক্স
+                    aspect_ratio=None,
+                    key=f"crop_pdf_{page_num}",
+                )
+
+            with col2:
+                st.write("📝 **সিলেক্ট করা অংশের টেক্সট:**")
+                if cropped_img:
+                    cropped_np = np.array(cropped_img.convert("RGB"))
+                    extracted_text = extract_and_merge_form_lines(cropped_np)
+
+                    st.text_area(
+                        label="Selected Region Text",
+                        value=extracted_text,
+                        height=400,
+                        key=f"text_pdf_{page_num}",
+                    )
+
+    # খ. যদি সাধারণ ইমেজ ফাইল হয় (JPG / PNG)
+    else:
+        pil_img = Image.open(uploaded_file).convert("RGB")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.write(
+                "✂️ **বাম পাশের বর্ডার টেনে যতটুকু অংশ প্রয়োজন সিলেক্ট করুন:**"
+            )
+            cropped_img = st_cropper(
+                pil_img,
+                realtime_update=True,
+                box_color="#00FF00",
+                aspect_ratio=None,
+                key="crop_img",
+            )
+
+        with col2:
+            st.write("📝 **সিলেক্ট করা অংশের টেক্সট:**")
+            if cropped_img:
+                cropped_np = np.array(cropped_img)
+                extracted_text = extract_and_merge_form_lines(cropped_np)
+
+                st.text_area(
+                    label="Selected Region Text",
+                    value=extracted_text,
+                    height=400,
+                    key="text_img",
+                )
