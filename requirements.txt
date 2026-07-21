@@ -1,7 +1,1 @@
-streamlit
-PyMuPDF
-rapidocr-onnxruntime
 opencv-python-headless
-numpy
-Pillow
-streamlit-drawable-canvas
